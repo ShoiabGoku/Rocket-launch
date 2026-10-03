@@ -7,13 +7,16 @@ const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const css = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
 const engine = fs.readFileSync(path.join(root, 'engine.js'), 'utf8');
 const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
-for (const [name, src] of [['engine.js', engine], ['app.js', app]]) if (/<\/script/i.test(src)) throw new Error(name + ' contains a closing script tag');
+const theatre = fs.readFileSync(path.join(root, 'theatre.js'), 'utf8');
+for (const [name, src] of [['engine.js', engine], ['app.js', app], ['theatre.js', theatre]]) if (/<\/script/i.test(src)) throw new Error(name + ' contains a closing script tag');
 
 const title = html.match(/<title>[\s\S]*?<\/title>/)[0];
 const fonts = (html.match(/<link rel="preconnect"[^>]*>|<link rel="stylesheet" href="https:\/\/fonts[^>]*>/g) || []).join('\n');
 let body = html.split('<!--BODY-->')[1].split('<!--/BODY-->')[0];
 body = body.replace('<script src="engine.js"></script>', () => `<script>\n${engine}\n</script>`)
-  .replace('<script src="app.js"></script>', () => `<script>\n${app}\n</script>`);
+  .replace('<script src="app.js"></script>', () => `<script>\n${app}\n</script>`)
+  .replace('<script src="theatre.js"></script>', () => `<script>\n${theatre}\n</script>`);
+if (/<script src=/.test(body)) throw new Error('an external script tag was left un-inlined');
 const page = `${title}\n${fonts}\n<style>\n${css}\n</style>\n${body.trim()}\n`;
 fs.mkdirSync(path.dirname(out), { recursive: true });
 fs.writeFileSync(out, page);

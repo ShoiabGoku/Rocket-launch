@@ -473,7 +473,7 @@
       }
     }
     if (cut && events) {
-      if (tgt.kind === 'orbit' && trim > 1) events.push({ t: t + timeToApo(el), label: `Circularisation burn at apoapsis (${Math.round(trim)} m/s)` });
+      if (tgt.kind === 'orbit' && trim > 20) events.push({ t: t + timeToApo(el), label: `Circularisation burn at apoapsis (${Math.round(trim)} m/s)` });
     }
     const need = dvIdeal + trim + shortfall;
     const avail = dvIdeal + leftover;
@@ -1395,8 +1395,8 @@
     }
     R.traj = tr;
     R.orbitAfter = { x: rRel, y: 0, vx: 0, vy: OMEGA * rRel }; // drawn with the ribbon fixed along +x
-    R.events = [{ t: 0, label: 'Climber departs the equatorial anchor' }, { t: climbT * (Math.min(1, (R_GEO - RE) / (rRel - RE))), label: rRel >= R_GEO ? 'Passes geostationary altitude: apparent gravity reverses' : 'Climbing' },
-      { t: climbT, label: `Release at ${((rRel - RE) / 1000).toLocaleString(undefined, { maximumFractionDigits: 0 })} km altitude, ${(OMEGA * rRel / 1000).toFixed(2)} km/s` }];
+    R.events = [{ t: 0, label: 'Climber departs the equatorial anchor' }, { t: climbT * 100e3 / (rRel - RE), label: 'Passes the Kármán line (100 km)' }].concat(rRel >= R_GEO * 1.001 ? [{ t: climbT * (R_GEO - RE) / (rRel - RE), label: 'Passes geostationary altitude: apparent gravity reverses' }] : []).concat([
+      { t: climbT, label: `Release at ${((rRel - RE) / 1000).toLocaleString(undefined, { maximumFractionDigits: 0 })} km altitude, ${(OMEGA * rRel / 1000).toFixed(2)} km/s` }]);
     if (kickDv > 1) R.events.push({ t: climbT + 6 * HOUR, label: `Kick burn ${Math.round(kickDv)} m/s` });
     R.dv = { onboard: kickDv, gravity: 0, drag: 0, steering: 0, trim: 0, start: OMEGA * RE, final: OMEGA * rRel, rotation: OMEGA * RE, assist: OMEGA * rRel - OMEGA * RE, kick: kickDv };
     R.notes.push(`Climb takes ${(climbT / DAY).toFixed(1)} days at ${P.speed} km/h. ${(dPhi / 1e6).toFixed(1)} MJ/kg of effective-potential rise.`);

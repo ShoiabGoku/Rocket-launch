@@ -115,6 +115,48 @@
   <div class="record">
     <section class="card verdict" id="verdict" aria-live="polite" aria-label="Verdict"></section>
 
+    <section class="card theatre" id="theatre" aria-labelledby="hTheatre">
+      <div class="sec-head">
+        <div>
+          <p class="eyebrow">Trial runs</p>
+          <h2 class="sec" id="hTheatre">Watch each method fly</h2>
+          <p class="sec-sub">Every method runs its own simulation in turn: the launcher at work, the computed flight, then the result. Time is compressed; the counter shows by how much.</p>
+        </div>
+        <div class="th-controls">
+          <button class="icon-btn" type="button" id="thPrev" aria-label="Previous method">◀ Prev</button>
+          <button class="icon-btn th-play" type="button" id="thPlay">Pause</button>
+          <button class="icon-btn" type="button" id="thNext" aria-label="Next method">Next ▶</button>
+          <label class="lbl" for="thSpeed" style="margin-left:4px">Speed</label>
+          <select id="thSpeed" style="width:auto"><option value="0.5">½×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select>
+        </div>
+      </div>
+      <div class="th-strip" id="thStrip" role="group" aria-label="Run order"></div>
+      <div class="th-grid">
+        <div class="canvas-wrap"><canvas id="thCanvas" aria-label="Animated trial run of the current launch method"></canvas></div>
+        <div class="th-side" aria-live="polite">
+          <p class="tele-name" id="thName"></p>
+          <p class="th-stage" id="thStage"></p>
+          <dl class="th-tele">
+            <dt>Mission clock</dt><dd id="thT">–</dd>
+            <dt>Time warp</dt><dd id="thWarp">–</dd>
+            <dt>Altitude</dt><dd id="thAlt">–</dd>
+            <dt>Speed</dt><dd id="thV">–</dd>
+            <dt>Dynamic pressure</dt><dd id="thQ">–</dd>
+            <dt>Mass</dt><dd id="thM">–</dd>
+          </dl>
+          <div class="gmeter">
+            <div class="field-row"><span class="lbl">Load on the payload</span><span class="val" id="thG">–</span></div>
+            <div class="gbar"><i id="thGBar"></i><b id="thGLim" title="Payload limit"></b></div>
+            <div class="gscale"><span>1 g</span><span>100 g</span><span>10,000 g</span></div>
+          </div>
+          <div>
+            <p class="eyebrow" style="margin-bottom:4px">Flight log</p>
+            <ol class="th-log" id="thLog"></ol>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <section class="card range" aria-labelledby="hRange">
       <div class="sec-head">
         <div>
@@ -252,6 +294,7 @@
 <div class="tip" id="tip" hidden></div>
 <script src="engine.js"></script>
 <script src="app.js"></script>
+<script src="theatre.js"></script>
 <!--/BODY-->
 </body>
 </html>

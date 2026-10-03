@@ -318,6 +318,7 @@
     rescore(true);
     if (!R.selected || !R.byId[R.selected] || !R.byId[R.selected].feasible) R.selected = R.ranked.length && R.ranked[0].feasible ? R.ranked[0].id : null;
     renderAll();
+    if (window.LBTheatre) window.LBTheatre.onResults();
     sweep.data = null;
     renderSweep();
     setTimeout(() => { if (myId === R.runId) runSweep(); }, 300);
@@ -1186,12 +1187,16 @@
     new MutationObserver(() => drawRange()).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
   }
 
-  // On narrow screens the verdict moves above the input rail so the answer comes first.
+  // On narrow screens the verdict and the trial-runs theatre move above the input rail so the answer comes first.
   const mqNarrow = matchMedia('(max-width: 1000px)');
   function placeVerdict() {
-    const v = $('#verdict');
-    if (mqNarrow.matches) { if (v.parentElement !== $('.bench')) $('.bench').insertBefore(v, $('.rail')); }
-    else if (v.parentElement !== $('.record')) $('.record').insertBefore(v, $('.record').firstChild);
+    const v = $('#verdict'), th = $('#theatre');
+    if (mqNarrow.matches) {
+      if (v.parentElement !== $('.bench')) { $('.bench').insertBefore(v, $('.rail')); $('.bench').insertBefore(th, $('.rail')); }
+    } else if (v.parentElement !== $('.record')) {
+      $('.record').insertBefore(th, $('.record').firstChild);
+      $('.record').insertBefore(v, th);
+    }
   }
   if (mqNarrow.addEventListener) mqNarrow.addEventListener('change', placeVerdict);
   placeVerdict();
@@ -1202,5 +1207,5 @@
   runTrials();
 
   // test hook for scripted checks
-  window.__LAUNCHBENCH = { S, R, sweep, play, runTrials, runSweep, select, setP, F };
+  window.__LAUNCHBENCH = { S, R, sweep, play, runTrials, runSweep, select, setP, F, h, METHOD, FAM, DASH, sig, nf };
 })();

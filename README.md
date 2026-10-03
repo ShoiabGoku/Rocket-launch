@@ -16,6 +16,16 @@ Open `index.html` through any static server (`node serve.js` → http://localhos
 
 Beyond low orbit, the Jupiter mission can use Venus–Earth–Earth **gravity-assist slingshots**. These cut the departure C3 from 80 to 17 km²/s², at the cost of a trip of 6 years instead of 2.7.
 
+## Watching each method fly
+
+The **Trial runs** theatre plays every method's simulation in turn. Each run has three parts:
+
+1. **The launcher at work.** You see a countdown on the pad, the carrier jet dropping its rocket, or the balloon ascent. Guns show the projectile racing up the coil track or maglev tunnel, the railgun's rails arcing, or the gas gun firing from its barge. The spin arm winds up and releases, the tether swings overhead, or the climber clamps onto the ribbon.
+2. **The computed flight.** The vehicle flies its simulated trajectory with time compressed (the counter shows the warp). Live telemetry, a g-meter against the payload's limit, and a flight log of every event (staging, aeroshell jettison, catch, release, burns) update as it goes.
+3. **The result.** A card shows mass, energy, cost, peak load and rank. Methods that cannot carry the payload stop partway through their launch sequence and show the reason.
+
+It runs through all methods automatically, about 3½ minutes at 1×. Prev, Next, Pause and ½–4× speed let you control it, and you can click any method to watch that run. It pauses when scrolled out of view or when the tab is hidden.
+
 ## The physics (`engine.js`, no dependencies, runs in Node and the browser)
 
 - **Trajectories**: 2-D point mass over a rotating spherical Earth, with RK4 integration, inverse-square gravity and the US Standard Atmosphere 1976 (tables to 1,000 km). Drag uses Mach-dependent C_D for rockets and for slender projectiles, and Isp varies with ambient pressure.
@@ -49,6 +59,7 @@ Flight is planar with an eastward azimuth, so GEO missions pay for the plane cha
 
 - `engine.js`: physics, sizing, methods, scoring (UMD: `window.LB` or `require`)
 - `app.js`, `style.css`, `index.html`: the interface (range canvas, leaderboard, SVG charts, crossover sweep, dossier)
+- `theatre.js`: the trial-runs player (launcher scenes, time-warped flight playback, telemetry, result cards); `window.LBTheatre.step(seconds)` advances it deterministically for tests
 - `test/validate.js`, `test/run.js`, `test/debug-*.js`: checks and probes
 - `tools/build-artifact.js`: inlines everything into one page for publishing
 - `serve.js`: local static server

@@ -97,5 +97,28 @@ check('erf(1)', LB.erf(1), 0.842701, 2e-6);
   truthy('air launch needs less onboard Δv than a ground launch', air.dv.onboard < gnd.dv.onboard, `${air.dv.onboard.toFixed(0)} vs ${gnd.dv.onboard.toFixed(0)} m/s`);
 }
 
+// 11. Energy audit: every joule accounted for, efficiencies match their closed forms
+{
+  const ctx = LB.makeContext({ payload: { mass: 200, gTol: 12000 }, mission: { dest: 'LEO', alt: 500, lat: 28.5 } });
+  let worst = 0, n = 0;
+  const byId = {};
+  for (const M of LB.METHODS) { const R = LB.runMethod(M.id, ctx, {}); byId[M.id] = R; if (!R.feasible) continue; n++; worst = Math.max(worst, Math.abs(R.cascade.closure)); }
+  check(`energy ledger closes for all ${n} feasible methods (worst residual)`, worst * 100, 0, 0.1, '%');
+  // internal efficiency ½c²/q: first stage at sea level (Isp 282 s) is the floor, upper stage in vacuum (348 s) the ceiling
+  const ex = byId.expendable.cascade.eta, q = LB.PROPS.kerolox.eChem;
+  const lo = 0.5 * Math.pow(282 * LB.G0, 2) / q, hi = 0.5 * Math.pow(348 * LB.G0, 2) / q;
+  truthy('kerolox internal efficiency lies between ½c²/q at sea level and in vacuum', ex.conversion > lo && ex.conversion < hi, `${(lo * 100).toFixed(1)}% < ${(ex.conversion * 100).toFixed(1)}% < ${(hi * 100).toFixed(1)}%`);
+  const lz = byId.laser.cascade.eta.conversion;
+  truthy('laser-thermal conversion ≤ laser × atmosphere × heat exchanger (0.45 × 0.85 × 0.60)', lz <= 0.45 * 0.85 * 0.6 + 1e-6 && lz > 0.17, (lz * 100).toFixed(1) + '%');
+  const ov = byId.coilgun.cascade.eta;
+  check('η_overall equals the product of its five factors', ov.overall, ov.utilisation * ov.conversion * ov.propulsive * ov.aero * ov.payload, 1e-12);
+  check('Sutton propulsive efficiency 2(u/c)/(1+(u/c)²) at u = c/2', LB.propulsiveEfficiency(0.5, 1), 0.8, 1e-12);
+  check('…and peaks at 1 when u = c', LB.propulsiveEfficiency(1, 1), 1, 1e-12);
+  const c0 = LB.makeContext({ payload: { mass: 200, gTol: 12000 }, mission: { dest: 'LEO', alt: 500, lat: 0 } });
+  const el = LB.runMethod('elevator', c0, {});
+  const lift = el.launchMass, rr = el.extra.rRel;
+  check('elevator: energy drawn from Earth’s rotation = m·ω²(r² − R²) below GEO', el.extra.Erot / (lift * LB.OMEGA ** 2 * (rr * rr - LB.RE * LB.RE)), 1, 1e-6);
+}
+
 console.log(`\n${pass} passed, ${failN} failed`);
 process.exit(failN ? 1 : 0);

@@ -234,6 +234,31 @@
     for (let i = 0; i < 5; i++) s[i] += dt / 6 * (_k1[i] + 2 * _k2[i] + 2 * _k3[i] + _k4[i]);
   }
 
+  // Instantaneous energy flows for the ledger, using the controls currently in K:
+  // [0] jet power ½ṁc², [1] mechanical-energy flux into the exhaust ṁ(½|v⃗ − c·û|² − μ/r − ε_g), [2] drag dissipation −D⃗·v⃗.
+  const _er0 = new Float64Array(3), _er1 = new Float64Array(3);
+  function energyRates(s, epsG, out) {
+    const x = s[0], y = s[1], vx = s[2], vy = s[3];
+    const r = Math.sqrt(x * x + y * y);
+    const vrx = vx + K.omega * y, vry = vy - K.omega * x, vrel = Math.sqrt(vrx * vrx + vry * vry);
+    const A = atm(r - RE);
+    let drag = 0, jet = 0, exh = 0;
+    if (vrel > 1e-3 && A.rho > 1e-15) {
+      const D = 0.5 * A.rho * vrel * vrel * lerpTab(K.cdTab, vrel / A.a) * K.area;
+      drag = D * (vrx * vx + vry * vy) / vrel;
+    }
+    if (K.mdot > 0) {
+      const c = G0 * (K.ispVac - (K.ispVac - K.ispSL) * Math.min(1, A.p / P0));
+      let ux, uy;
+      if (K.dir === 1 && vrel > 1) { ux = vrx / vrel; uy = vry / vrel; }
+      else { const ex = x / r, ey = y / r, cs = Math.cos(K.theta), sn = Math.sin(K.theta); ux = -cs * ey + sn * ex; uy = cs * ex + sn * ey; }
+      jet = 0.5 * K.mdot * c * c;
+      const wx = vx - c * ux, wy = vy - c * uy;
+      exh = K.mdot * (0.5 * (wx * wx + wy * wy) - MU / r - epsG);
+    }
+    out[0] = jet; out[1] = exh; out[2] = drag;
+  }
+
   /* fly(veh, init, tgt, gp, opt)
    *  veh:  { stages:[{prop, dry, reserve, ispSL, ispVac, mdot}], payload, fairing, shell, area, shellArea, cdTab, rn, aMax, single }
    *  init: { x, y, vx, vy, omega, mode:'pad'|'air'|'coast' }
@@ -259,6 +284,12 @@
     let dvIdeal = 0, lg = 0, ld = 0, ls = 0, peakG = 0, peakQ = 0, peakHeat = 0, heatLoad = 0, dragWork = 0, maxAlt = 0, maxMach = 0;
     let cut = false, crashed = false, exhausted = false, tIgn = ignited ? 0 : -1, tCut = 0;
     const v0 = Math.hypot(s[2], s[3]);
+    // Energy ledger, mechanical energies measured from the ground state ε_g (at rest on the rotating surface).
+    // jet: ½·ṁ·c² (Sutton's jet power); exhaust: mechanical energy left in the plume; drag: −∫D⃗·v⃗ dt (inertial);
+    // hardware: mechanical energy carried off by everything jettisoned. Closure: E0 + jet = Ef + drag + exhaust + hardware.
+    const epsG = init.epsG != null ? init.epsG : 0.5 * (s[2] * s[2] + s[3] * s[3]) - MU / Math.hypot(s[0], s[1]);
+    const E0 = s[4] * (0.5 * (s[2] * s[2] + s[3] * s[3]) - MU / Math.hypot(s[0], s[1]) - epsG);
+    let eJet = 0, eExh = 0, eDrag = 0, eHw = 0;
     const tMax = opt.tMax || 6000;
     let nextRec = 0;
     const kickRad = (gp || 0) * D2R;
@@ -291,7 +322,7 @@
       const Dmag = q * lerpTab(K.cdTab, mach) * area;
       const eps = 0.5 * v * v - MU / r;
 
-      if (fairOn && alt > 110e3) { m -= veh.fairing; s[4] = m; fairOn = false; ev('Fairing jettison'); }
+      if (fairOn && alt > 110e3) { eHw += veh.fairing * (eps - epsG); m -= veh.fairing; s[4] = m; fairOn = false; ev('Fairing jettison'); }
 
       // coasting projectile: light the onboard stage near apoapsis (or as soon as it is out of the air if the arc is too low)
       if (!ignited) {
@@ -309,7 +340,7 @@
         if (vr < 0 && t > 1 && !go) { go = true; rIns = Math.max(r, Math.min(tgt.rFinal || tgt.r, RE + 200e3)); }
         if (go) {
           ignited = true; tIgn = t;
-          if (shellOn) { m -= veh.shell; s[4] = m; shellOn = false; ev('Aeroshell jettison'); }
+          if (shellOn) { eHw += veh.shell * (eps - epsG); m -= veh.shell; s[4] = m; shellOn = false; ev('Aeroshell jettison'); }
           mode = 'guided';
           // insert at this altitude onto the transfer ellipse whose other apsis is the parking orbit
           if (tgt.kind === 'orbit') {
@@ -325,6 +356,7 @@
       if (ignited && !cut && si < st.length && t >= coastUntil) {
         const sg = st[si];
         if (sg.left - sg.reserveMass <= 1e-6) {
+          eHw += (sg.dry + sg.left) * (eps - epsG);
           m -= sg.dry + sg.left; s[4] = m; si++;
           if (si >= st.length) { exhausted = true; ev('Propellant depleted'); break; }
           coastUntil = t + 2; mode = 'guided'; frozen = false;
@@ -424,7 +456,13 @@
         K.ispSL = st[si].ispSL; K.ispVac = st[si].ispVac;
         if (mode === 'pro') K.dir = 1; else { K.dir = 0; K.theta = theta; }
       }
+      // energy ledger: trapezoid of the rates at both ends of the step, same controls
+      energyRates(s, epsG, _er0);
       rk4(s, dt);
+      energyRates(s, epsG, _er1);
+      eJet += 0.5 * (_er0[0] + _er1[0]) * dt;
+      eExh += 0.5 * (_er0[1] + _er1[1]) * dt;
+      eDrag += 0.5 * (_er0[2] + _er1[2]) * dt;
       if (thrusting) st[si].left -= mdot * dt;
       t += dt;
 
@@ -478,7 +516,8 @@
     const need = dvIdeal + trim + shortfall;
     const avail = dvIdeal + leftover;
     return {
-      ok: cut, cut, crashed, exhausted, t, tCut, tIgn, el, state: { x: s[0], y: s[1], vx: s[2], vy: s[3] }, dvIdeal, trim, shortfall, leftover, need, avail,
+      ok: cut, cut, crashed, exhausted, t, tCut, tIgn, el, si: Math.min(si, st.length - 1), state: { x: s[0], y: s[1], vx: s[2], vy: s[3] },
+      energy: { jet: eJet, exhaust: eExh, drag: eDrag, hardware: eHw, E0, Ef: s[4] * (el.eps - epsG), epsG }, dvIdeal, trim, shortfall, leftover, need, avail,
       losses: { gravity: lg, drag: ld, steering: ls }, v0, vf: el.v, m0, mf: s[4],
       peakG, peakQ, peakHeat, heatLoad, dragWork, maxAlt, maxMach, rec, events, stagesLeft: st.map(q => q.left),
     };
@@ -711,12 +750,89 @@
     R.peakHeat = Math.max(R.peakHeat, sim.peakHeat);
     R.time = sim.t + (sim.trim > 20 ? timeToApo(sim.el) : 0);
     R.orbitAfter = sim.state;
+    R._sim = sim;
   }
   function ledger(sim, extra) {
     return Object.assign({
       onboard: sim.dvIdeal + sim.trim, gravity: sim.losses.gravity, drag: sim.losses.drag, steering: sim.losses.steering,
       trim: sim.trim, start: sim.v0, final: sim.vf,
     }, extra || {});
+  }
+
+  // ───────────────────────── energy audit (textbook efficiency chain) ─────────────────────────
+  // Every joule put in ends up in exactly one place: never used (reserves), lost converting it to jet or kinetic
+  // energy, left in the exhaust plume, dissipated by drag, carried off by spent hardware, or in the payload.
+  //   η_overall = E_payload / E_in = η_utilisation · η_conversion · η_propulsive · η_aero · η_payload
+  // (internal and propulsive efficiency as defined by Sutton & Biblarz, extended end to end for a launch system).
+  const C_STORABLE = 320 * G0;
+  // After a simulated flight: impulsive trim at apoapsis, unburned propellant, spent top stage.
+  function flightLedger(ctx, sim, veh, kind) {
+    const epsG = ctx.D.epsGround, en = sim.energy;
+    const L = { jet: en.jet, exhaust: en.exhaust, drag: en.drag, hardware: en.hardware, reserve: 0, E0: en.E0, fly: en };
+    const n = veh.stages.length, si = Math.min(sim.si, n - 1), left = sim.stagesLeft;
+    const chem = k => PROPS[veh.stages[k].key].eChem;
+    for (let k = 0; k < si; k++) L.reserve += left[k] * chem(k);           // dropped with earlier stages (landing reserves)
+    for (let k = si + 1; k < n; k++) L.reserve += veh.stages[k].prop * chem(k); // stages never lit
+    const top = left[si], mcut = sim.mf, epsCut = sim.el.eps;
+    if (kind === 'orbit') {
+      const c = G0 * veh.stages[si].ispVac;
+      const usable = Math.max(0, top - veh.stages[si].prop * (veh.stages[si].reserve || 0));
+      const mT = sim.trim > 0.5 ? Math.min(usable, mcut * (1 - Math.exp(-sim.trim / c))) : 0;
+      L.reserve += (top - mT) * chem(si);
+      const jetT = 0.5 * mT * c * c, epsP = -MU / (2 * ctx.D.rPark);
+      const before = mcut * (epsCut - epsG), after = (mcut - mT) * (epsP - epsG);
+      L.jet += jetT; L.exhaust += jetT - (after - before);
+      L.hardware += (mcut - mT - veh.payload) * (epsP - epsG);
+      L.stack = { mass: veh.payload, eps: epsP };
+    } else {
+      L.reserve += top * chem(si);
+      L.hardware += (mcut - veh.payload) * (epsCut - epsG);
+      L.stack = { mass: veh.payload, eps: epsCut };
+    }
+    return L;
+  }
+  // An impulsive storable-propellant burn (departure or kick stage) taking the stack to the destination energy.
+  function burnLedger(ctx, L, stage, payloadMass) {
+    if (!stage || !(stage.prop > 0)) return;
+    const epsG = ctx.D.epsGround, epsF = ctx.D.epsFinal;
+    const jet = 0.5 * stage.prop * C_STORABLE * C_STORABLE;
+    const before = L.stack.mass * (L.stack.eps - epsG), after = (payloadMass + stage.dry) * (epsF - epsG);
+    L.jet += jet; L.exhaust += jet - (after - before); L.hardware += stage.dry * (epsF - epsG);
+    L.stack = { mass: payloadMass, eps: epsF };
+  }
+  // Mechanical energy a launcher hands over, measured in the ground frame (speed relative to the ground, height above sea level).
+  // Sutton & Biblarz: instantaneous propulsive efficiency of a jet, vehicle speed u, effective exhaust velocity c.
+  const propulsiveEfficiency = (u, c) => 2 * (u / c) / (1 + (u / c) * (u / c));
+  const groundFrameMech = (m, vRel, h) => m * (0.5 * vRel * vRel + MU / RE - MU / (RE + h));
+
+  function buildCascade(R) {
+    const c = R._cas;
+    if (!R.feasible || !c) { R.cascade = null; R.etaOverall = null; return; }
+    const src = [];
+    if (R.E.onboard > 0) src.push({ k: 'chem', label: 'Onboard propellant (chemical energy)', J: R.E.onboard });
+    if (R.E.ground > 0) src.push({ k: 'ground', label: c.groundLabel || 'Ground energy', J: R.E.ground });
+    if (R.E.space > 0) src.push({ k: 'space', label: 'Solar power in orbit (tether reboost)', J: R.E.space });
+    if ((c.env || 0) > 1) src.push({ k: 'env', label: c.envLabel || 'Environment', J: c.env, env: true });
+    const Ein = src.reduce((a, s) => a + s.J, 0);
+    const mech = c.jet + (c.launcherMech || 0) + Math.max(0, c.env || 0);
+    const payload = R.useful, reserve = c.reserve || 0;
+    const conversion = Ein - reserve - mech;
+    const hardware = mech - c.exhaust - c.drag - payload; // closes the ledger exactly
+    const closure = (hardware - c.hardware) / Ein;        // independent check from the integrator
+    const R1 = Ein - reserve, R2 = R1 - conversion, R3 = R2 - c.exhaust, R4 = R3 - c.drag;
+    R.cascade = {
+      Ein, sources: src, mech, closure, convNote: c.convNote || '',
+      bins: [
+        { k: 'reserve', label: 'Reserves & unburned propellant', J: reserve },
+        { k: 'conversion', label: 'Conversion losses', J: conversion },
+        { k: 'exhaust', label: 'Left in the exhaust plume', J: c.exhaust },
+        { k: 'drag', label: 'Drag & aerodynamic heating', J: c.drag },
+        { k: 'hardware', label: 'Spent hardware', J: hardware },
+        { k: 'payload', label: 'Payload orbital energy', J: payload },
+      ],
+      eta: { utilisation: R1 / Ein, conversion: R2 / R1, propulsive: R3 / R2, aero: R4 / R3, payload: payload / R4, overall: payload / Ein },
+    };
+    R.etaOverall = payload / Ein;
   }
 
   // ───────────────────────── method families ─────────────────────────
@@ -737,7 +853,7 @@
     const pStart = atm(startAlt).p;
     const spec = { stages: cfg.stages, fairing: cfg.noFairing ? 0 : fairingMass(PL), pStart, cdTab: CD_ROCKET, aMax: ctx.aMax, shell: 0 };
     const r0 = RE + startAlt;
-    const init = { x: r0, y: 0, vx: 0, vy: ctx.omega * r0 + (cfg.startV || 0), omega: ctx.omega, mode: cfg.mode || 'pad' };
+    const init = { x: r0, y: 0, vx: 0, vy: ctx.omega * r0 + (cfg.startV || 0), omega: ctx.omega, mode: cfg.mode || 'pad', epsG: ctx.D.epsGround };
     const gpList = cfg.mode === 'air' ? GAMMAS : (ctx.fast ? KICKS_FAST : KICKS);
     const des = designRocket(spec, PL, init, D.tgtIns, { gp: cfg.mode === 'air' ? 55 : 2.6, gpList, dvGuess: cfg.dvGuess || 9300 });
     if (!des.ok) return fail(R, des.reason || 'Could not close the ascent');
@@ -757,6 +873,13 @@
     R.orbitAfter = sim.state;
     addDeparture(R, ctx);
     R.ops = opsCost(veh.glow);
+    // energy audit
+    const L = flightLedger(ctx, sim, veh, 'orbit');
+    burnLedger(ctx, L, ctx.dep, ctx.payload.mass);
+    let launcherMech = 0, env = 0, envLabel = '';
+    if (cfg.mode === 'air') { launcherMech = groundFrameMech(veh.glow, cfg.startV || 0, startAlt); env = L.E0 - launcherMech; envLabel = "Earth's rotation"; }
+    else if (startAlt > 0) { env = L.E0; envLabel = 'Buoyancy of the lift gas'; }
+    R._cas = Object.assign(L, { launcherMech, env, envLabel, groundLabel: cfg.groundLabel, convNote: cfg.convNote || 'Combustion energy that never becomes jet kinetic energy (Sutton’s internal efficiency).' });
     return R;
   }
 
@@ -793,7 +916,7 @@
       const hard = hardeningFactor(gLaunch);
       const st = nStages === 1 ? [Object.assign({}, stage2, { mul: hard })] : [Object.assign({}, stage1, { mul: hard }), Object.assign({}, stage2, { mul: hard })];
       const e = elevDeg * D2R;
-      const init = { x: r0, y: 0, vx: v * Math.sin(e), vy: om * r0 + v * Math.cos(e), omega: om, mode: 'coast' };
+      const init = { x: r0, y: 0, vx: v * Math.sin(e), vy: om * r0 + v * Math.cos(e), omega: om, mode: 'coast', epsG: ctx.D.epsGround };
       // aeroshell + hardening scale with the stack; ablator scales with the drag work done on the way out of the air
       let shell = 0.15 * PL, abl = 0, des = null, dvG = Math.max(800, (vCirc(tgt.r) - v * Math.cos(e)) * 0.9);
       const specOf = () => ({ stages: st, fairing: 0, pStart: 0, cdTab: CD_SLENDER, aMax: Math.max(aTol, 3 * G0), shell: shell + abl, projD });
@@ -885,14 +1008,24 @@
     if (limitedBy === 'g') warn(R, `Exit speed held to ${(vMax / 1000).toFixed(2)} km/s by the payload's ${pay.gTol.toLocaleString()} g limit (launcher can do ${(P.vMax / 1000).toFixed(1)} km/s)`);
     if (sim.peakHeat > 50e6) warn(R, `Nose heat flux peaks at ${(sim.peakHeat / 1e6).toFixed(0)} MW/m² on exit: ablative nose required`);
     addDeparture(R, ctx);
+    // energy audit: the launcher hands over ½·M·v² in the ground frame; Earth's rotation and the site altitude add the rest
+    R._sim = sim;
+    const L = flightLedger(ctx, sim, veh, 'orbit');
+    burnLedger(ctx, L, ctx.dep, ctx.payload.mass);
+    const launcherMech = 0.5 * Mproj * fin.v * fin.v;
+    R._cas = Object.assign(L, {
+      launcherMech, env: L.E0 - launcherMech, envLabel: "Earth's rotation & launch-site altitude",
+      groundLabel: cfg.gas ? 'Gas charge (chemical energy)' : 'Grid electricity for the launcher',
+      convNote: `Launcher losses (${Math.round(P.eta * 100)}% ${cfg.gas ? 'gas' : 'grid'}-to-kinetic, ${cfg.centripetal ? 'spin-arm' : 'sled and armature'} energy) plus the onboard stage’s combustion losses.`,
+    });
     return R;
   }
 
   function finalize(R, ctx) {
     const pay = ctx.payload, D = ctx.D;
     if (!R.feasible) {
-      for (const k of ['eff', 'effSite', 'energyPerKg', 'costPerKg', 'co2PerKg', 'payloadFraction', 'gMargin', 'timeToDest']) R[k] = null;
-      R.cost.total = null;
+      for (const k of ['eff', 'effSite', 'etaOverall', 'energyPerKg', 'costPerKg', 'co2PerKg', 'payloadFraction', 'gMargin', 'timeToDest']) R[k] = null;
+      R.cost.total = null; R.cascade = null;
       return R;
     }
     R.useful = pay.mass * D.usefulPerKg;
@@ -907,6 +1040,8 @@
     R.payloadFraction = pay.mass / Math.max(1, R.launchMass);
     R.gMargin = pay.gTol / Math.max(1, R.peakG);
     R.timeToDest = R.time + (D.trip || 0);
+    buildCascade(R);
+    delete R._sim;
     return R;
   }
 
@@ -1003,7 +1138,8 @@
       ],
       run(ctx, P) {
         const R = runRocket(this, ctx, P, {
-          startAlt: P.dropAlt, startV: P.dropV, mode: 'air', dvGuess: 8800,
+          startAlt: P.dropAlt, startV: P.dropV, mode: 'air', dvGuess: 8800, groundLabel: 'Carrier aircraft jet fuel',
+          convNote: 'Rocket combustion losses, plus the carrier jet’s fuel energy beyond the height and speed it hands the rocket at the drop.',
           stages: [stageSpec('kerolox', 'booster', { ispSL: 282, ispVac: 311, tw: 1.3 }), stageSpec('kerolox', 'upper', { ispVac: 340, tw: 0.9 })],
         });
         if (!R.feasible) return R;
@@ -1066,7 +1202,8 @@
       ],
       run(ctx, P) {
         const R = runRocket(this, ctx, P, {
-          dvGuess: 9600,
+          dvGuess: 9600, groundLabel: 'Grid electricity for the laser array',
+          convNote: 'Laser wall-plug, atmospheric transmission and heat-exchanger losses: grid energy that never becomes jet kinetic energy.',
           stages: [stageSpec('h2heat', 'upper', { ispSL: P.isp * 0.8, ispVac: P.isp, tw: 1.3, mul: 2.2, add: 0.04 })],
         });
         if (!R.feasible) return R;
@@ -1265,7 +1402,7 @@
     const tgt = { kind: 'catch', r: rc, vh: vCatch, eps: 0.5 * vCatch * vCatch - MU / rc };
     const spec = { stages: [stageSpec('kerolox', 'booster', { ispSL: 282, ispVac: 311, tw: 1.4, mul: 1.15, add: 0.008, reserve: 0.09 }), stageSpec('kerolox', 'upper', { ispVac: 348, tw: 0.9 })],
       fairing: fairingMass(stack), pStart: P0, cdTab: CD_ROCKET, aMax: ctx.aMax, shell: 0 };
-    const init = { x: RE, y: 0, vx: 0, vy: ctx.omega * RE, omega: ctx.omega, mode: 'pad' };
+    const init = { x: RE, y: 0, vx: 0, vy: ctx.omega * RE, omega: ctx.omega, mode: 'pad', epsG: ctx.D.epsGround };
     const des = designRocket(spec, stack, init, tgt, { gp: 2.6, gpList: ctx.fast ? KICKS_FAST : KICKS, dvGuess: 6000 });
     if (!des.ok) return fail(R, des.reason || 'Suborbital rocket could not reach the catch point');
     const veh = des.veh, sim = des.sim;
@@ -1319,6 +1456,13 @@
     R.extra = { catchAlt, vCatch, vRelease: Math.hypot(best.vx, best.vy), releaseDeg: best.deg, kickDv: best.dv, Mfac, tetherRatio: tr, vc, Ere, Pspace, rcm, L, releaseEl: best.el };
     R.notes.push(`Facility mass ${(Mfac / 1000).toFixed(1)} t (${Math.round(Mfac / stack)}× the payload stack). Reboost needs ${(Ere / 1e9).toFixed(1)} GJ of solar energy per catch.`);
     R.notes.push('Catching a payload at hypersonic relative speed with metre-level timing has never been demonstrated.');
+    // energy audit: rocket to the tip, the tether's orbital energy handed to the stack, then the kick burn
+    const LG = flightLedger(ctx, sim, veh, 'catch');
+    const tetherMech = stack * (best.el.eps - LG.stack.eps);
+    LG.stack = { mass: stack, eps: best.el.eps };
+    burnLedger(ctx, LG, kick, pay.mass);
+    R._cas = Object.assign(LG, { launcherMech: tetherMech, env: 0, groundLabel: '', convNote: 'Rocket combustion losses, plus the reboost system’s losses in restoring the tether’s orbit (solar energy that never becomes orbital energy).' });
+    R.extra.tetherMech = tetherMech;
     return R;
   }
 
@@ -1401,19 +1545,43 @@
     R.dv = { onboard: kickDv, gravity: 0, drag: 0, steering: 0, trim: 0, start: OMEGA * RE, final: OMEGA * rRel, rotation: OMEGA * RE, assist: OMEGA * rRel - OMEGA * RE, kick: kickDv };
     R.notes.push(`Climb takes ${(climbT / DAY).toFixed(1)} days at ${P.speed} km/h. ${(dPhi / 1e6).toFixed(1)} MJ/kg of effective-potential rise.`);
     if (P.sigma > 20) warn(R, `${P.sigma} GPa at ${P.rho} kg/m³ is far beyond any fibre made at length (best ≈ 7 GPa)`);
+    // energy audit. In the inertial frame the stack gains more energy than the climb work: the ribbon's Coriolis
+    // reaction hands over some of Earth's rotational energy. Above GEO the climber must brake, and that energy is lost.
+    const epsG = ctx.D.epsGround, epsRel = 0.5 * Math.pow(OMEGA * rRel, 2) - MU / rRel;
+    const mechLift = lift * (epsRel - epsG);
+    const Ebrake = rRel > R_GEO ? lift * (phiEff(R_GEO) - phiEff(rRel)) : 0;
+    const Erot = mechLift - Emech + Ebrake;
+    const LG = { jet: 0, exhaust: 0, drag: 0, hardware: climber * (epsRel - epsG), reserve: 0, stack: { mass: stack, eps: epsRel } };
+    burnLedger(ctx, LG, kick, pay.mass);
+    R._cas = Object.assign(LG, {
+      launcherMech: mechLift - Erot, env: Erot, envLabel: "Earth's rotation (through the ribbon)", groundLabel: 'Grid electricity for the climber’s power beam',
+      convNote: `Power-beaming chain (${Math.round(P.eta * 100)}% grid-to-climber)${Ebrake > 0 ? ', plus braking above GEO' : ''}, and the kick stage’s combustion losses.`,
+    });
+    R.extra.Erot = Erot; R.extra.Ebrake = Ebrake;
     return R;
   }
 
   // ───────────────────────── scoring ─────────────────────────
   const METRICS = [
-    { k: 'eff', label: 'Energy efficiency', better: 'high', log: true, unit: '%', fmt: v => (v * 100).toFixed(v < 0.01 ? 2 : 1) + '%' },
+    { k: 'etaOverall', label: 'Overall efficiency', better: 'high', log: true, unit: '%' },
     { k: 'costPerKg', label: 'Cost per kg', better: 'low', log: true, unit: '$/kg' },
     { k: 'payloadFraction', label: 'Payload fraction', better: 'high', log: true, unit: '%' },
     { k: 'trl', label: 'Readiness (TRL)', better: 'high', log: false },
     { k: 'co2PerKg', label: 'CO₂ per kg', better: 'low', log: true, unit: 'kg' },
     { k: 'timeToDest', label: 'Time to destination', better: 'low', log: true, unit: 's' },
   ];
-  const DEFAULT_WEIGHTS = { eff: 30, costPerKg: 30, payloadFraction: 10, trl: 20, co2PerKg: 10, timeToDest: 0 };
+  const DEFAULT_WEIGHTS = { etaOverall: 30, costPerKg: 30, payloadFraction: 10, trl: 20, co2PerKg: 10, timeToDest: 0 };
+  // How "efficient" is judged. The first is the engineering definition and the default.
+  const DEFINITIONS = [
+    { id: 'overall', label: 'Overall efficiency', short: 'η overall', weights: { etaOverall: 1 },
+      blurb: 'Useful energy out divided by energy in: the payload’s gain in orbital energy over every joule spent at the site. The product of the conversion, propulsive, aerodynamic and payload efficiencies.' },
+    { id: 'payload', label: 'Payload fraction', short: 'payload fraction', weights: { payloadFraction: 1 },
+      blurb: 'The launch-vehicle designer’s figure of merit since Tsiolkovsky: payload mass over the mass that leaves the ground.' },
+    { id: 'cost', label: 'Cost per kilogram', short: 'cost per kg', weights: { costPerKg: 1 },
+      blurb: 'The economist’s figure of merit (Koelle’s TRANSCOST): what it costs to deliver each kilogram, with infrastructure amortized.' },
+    { id: 'trade', label: 'Weighted trade study', short: 'weighted score', weights: null,
+      blurb: 'A multi-attribute trade study: your own weights across efficiency, cost, mass, readiness, emissions and time.' },
+  ];
   function score(results, weights) {
     const ok = results.filter(r => r.feasible);
     const norm = {};
@@ -1425,7 +1593,7 @@
       norm[M.k] = { lo: Math.min(...vals.map(f)), hi: Math.max(...vals.map(f)), f };
     }
     let wsum = 0;
-    for (const k in weights) wsum += weights[k] || 0;
+    for (const M of METRICS) wsum += weights[M.k] || 0;
     for (const r of results) {
       r.scores = {};
       if (!r.feasible) { r.score = 0; continue; }
@@ -1484,8 +1652,8 @@
   return {
     MU, RE, OMEGA, G0, R_GEO, R_MOON, DAY, YEAR, HOUR,
     atm, us76, elems, vCirc, keplerPropagate, dvToCircular, dvToGEO, timeToApo, phiEff, tetherMassRatio, charVelocity, erf,
-    destination, sizeStage, sizeKick, buildVehicle, fly, designRocket,
-    PROPS, STRUCT, FAMILIES, METHODS, METRICS, DEFAULT_WEIGHTS, score, makeContext, runMethod, paramDefaults, resolveParams,
+    destination, sizeStage, sizeKick, buildVehicle, fly, designRocket, propulsiveEfficiency,
+    PROPS, STRUCT, FAMILIES, METHODS, METRICS, DEFAULT_WEIGHTS, DEFINITIONS, score, makeContext, runMethod, paramDefaults, resolveParams,
     CD_ROCKET, CD_SLENDER,
   };
 }));

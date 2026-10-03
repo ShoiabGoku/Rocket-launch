@@ -191,7 +191,7 @@
   }
   function resultLine(r) {
     const D = X.R.ctx.D;
-    return `reached ${D.short} · ${F.mass(r.launchMass)} launched · ${F.ePerKg(r.energyPerKg)} · ${F.money(r.costPerKg)}/kg`;
+    return `reached ${D.short} · η ${F.pct(r.etaOverall)} · ${F.mass(r.launchMass)} launched · ${F.money(r.costPerKg)}/kg`;
   }
 
   // ───────────── drawing primitives ─────────────
@@ -611,7 +611,7 @@
     const bw = Math.min(W - 40, 480);
     g.font = '13px ' + css('--font-body');
     const lines = r.feasible
-      ? [`${F.mass(r.launchMass)} launched · ${F.pct(r.payloadFraction)} payload`, `${F.ePerKg(r.energyPerKg)} (${F.pct(r.eff)} efficient) · ${F.money(r.costPerKg)}/kg`, `Peak load ${F.g(r.peakG)} · ${F.time(r.timeToDest)} to destination`]
+      ? [`Overall efficiency η ${F.pct(r.etaOverall)} (payload energy ÷ energy in)`, `${F.mass(r.launchMass)} launched · ${F.pct(r.payloadFraction)} payload · ${F.money(r.costPerKg)}/kg`, `Peak load ${F.g(r.peakG)} · ${F.time(r.timeToDest)} to destination`]
       : wrap(g, failText(r), bw - 40);
     const bh = 64 + lines.length * 20;
     // put the card in whichever corner the flight path leaves most empty

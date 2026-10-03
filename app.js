@@ -104,6 +104,7 @@
     payload: { mass: 200, gTol: 12000, density: 800 },
     mission: { dest: 'LEO', alt: 500, lat: 28.5, assist: false },
     econ: { perYear: 100, years: 20, elecPrice: 0.08, gridCO2: 0.35 },
+    definition: 'overall',
     weights: Object.assign({}, LB.DEFAULT_WEIGHTS),
     enabled: Object.fromEntries(LB.METHODS.map(m => [m.id, true])),
     params: Object.fromEntries(LB.METHODS.map(m => [m.id, LB.paramDefaults(m)])),
@@ -113,19 +114,24 @@
     const raw = localStorage.getItem(STORE);
     if (raw) {
       const saved = JSON.parse(raw), d = defaults();
+      const w = Object.assign({}, saved.weights || {});
+      if ('eff' in w) { if (!('etaOverall' in w)) w.etaOverall = w.eff; delete w.eff; } // older saves weighted lifecycle energy
       S = {
         preset: saved.preset || null,
         payload: Object.assign(d.payload, saved.payload), mission: Object.assign(d.mission, saved.mission), econ: Object.assign(d.econ, saved.econ),
-        weights: Object.assign(d.weights, saved.weights), enabled: Object.assign(d.enabled, saved.enabled), params: d.params,
+        definition: LB.DEFINITIONS.some(x => x.id === saved.definition) ? saved.definition : 'overall',
+        weights: Object.assign(d.weights, w), enabled: Object.assign(d.enabled, saved.enabled), params: d.params,
       };
       for (const id in saved.params || {}) if (S.params[id]) Object.assign(S.params[id], saved.params[id]);
     }
   } catch (e) { /* storage unavailable: use defaults */ }
+  const DEF = () => LB.DEFINITIONS.find(x => x.id === S.definition) || LB.DEFINITIONS[0];
+  const activeWeights = () => DEF().weights || S.weights;
   const save = () => { try { localStorage.setItem(STORE, JSON.stringify(S)); } catch (e) { /* ignore */ } };
 
   const R = { ctx: null, results: [], ranked: [], byId: {}, selected: null, status: {}, running: false, runId: 0 };
   const play = { p: 1, timer: null, view: 'ascent' };
-  const sweep = { x: 'mass', y: 'costPerKg', data: null, runId: 0, running: false, key: '' };
+  const sweep = { x: 'mass', y: 'etaOverall', data: null, runId: 0, running: false, key: '' };
   const boardSort = { k: 'score', dir: -1 };
 
   // ───────────────────────── input rail ─────────────────────────
@@ -181,7 +187,7 @@
     $('#assist').addEventListener('change', e => { S.mission.assist = e.target.checked; syncDest(); onInputsChanged(false); });
     syncDest();
     syncG();
-    buildWeights();
+    buildDefinitions();
     buildRoster();
   }
   function syncDest() {
@@ -203,6 +209,25 @@
     inputs.mass.sync(); inputs.gTol.sync(); inputs.density.sync();
     onInputsChanged(false);
   }
+  function buildDefinitions() {
+    const box = $('#definitions');
+    box.textContent = '';
+    LB.DEFINITIONS.forEach((d, i) => {
+      const id = 'def_' + d.id;
+      const inp = h('input', { type: 'radio', name: 'definition', id, value: d.id });
+      inp.checked = S.definition === d.id;
+      inp.addEventListener('change', () => {
+        S.definition = d.id;
+        for (const el of box.children) el.classList.toggle('on', el.dataset.id === d.id);
+        $('#weights').hidden = d.id !== 'trade';
+        syncWSum(); rescore(); save();
+      });
+      box.append(h('label', { class: 'def' + (S.definition === d.id ? ' on' : ''), for: id, 'data-id': d.id }, inp,
+        h('b', {}, d.label, i === 0 ? h('span', { class: 'tag', text: 'engineering definition' }) : null), h('span', { text: d.blurb })));
+    });
+    $('#weights').hidden = S.definition !== 'trade';
+    buildWeights();
+  }
   function buildWeights() {
     const box = $('#weights');
     box.textContent = '';
@@ -219,7 +244,8 @@
     syncWSum();
   }
   function syncWSum() {
-    const w = S.weights, tot = Object.values(w).reduce((a, b) => a + b, 0) || 1;
+    if (S.definition !== 'trade') { $('#wSum').textContent = DEF().short; return; }
+    const w = S.weights, tot = LB.METRICS.reduce((a, M) => a + (w[M.k] || 0), 0) || 1;
     const top = LB.METRICS.filter(M => w[M.k] > 0).sort((a, b) => w[b.k] - w[a.k]).slice(0, 2).map(M => `${M.label.split(' ')[0]} ${Math.round(100 * w[M.k] / tot)}%`);
     $('#wSum').textContent = top.join(' · ');
   }
@@ -325,13 +351,13 @@
   }
   function rescore(silent) {
     if (!R.results.length) return;
-    R.ranked = LB.score(R.results, S.weights);
-    if (!silent) { renderVerdict(); renderBoard(); }
+    R.ranked = LB.score(R.results, activeWeights());
+    if (!silent) { renderVerdict(); renderBoard(); renderAudit(); }
   }
 
   // ───────────────────────── verdict ─────────────────────────
   const metricDefs = {
-    eff: { label: 'Energy', better: 'high', fmt: F.pct },
+    etaOverall: { label: 'Efficiency', better: 'high', fmt: v => 'η ' + F.pct(v) },
     costPerKg: { label: 'Cost', better: 'low', fmt: v => F.money(v) + '/kg' },
     payloadFraction: { label: 'Mass', better: 'high', fmt: v => F.pct(v) + ' payload' },
     trl: { label: 'Readiness', better: 'high', fmt: v => 'TRL ' + v },
@@ -356,25 +382,42 @@
         h('p', { class: 'verdict-why', text: 'Every enabled method failed. Try a lighter payload, a higher g-tolerance, or enable more methods.' })));
       return;
     }
-    const w = ok[0];
-    const reasons = [];
-    const keys = Object.keys(metricDefs).filter(k => (S.weights[k] || 0) > 0).sort((a, b) => S.weights[b] - S.weights[a]);
-    for (const k of keys) {
-      const b = bestBy(k);
-      if (b && b.id === w.id) reasons.push(`the best ${metricDefs[k].label.toLowerCase()} figure (${metricDefs[k].fmt(w[k])})`);
-    }
-    const strengths = Object.keys(w.scores || {}).filter(k => (S.weights[k] || 0) > 0).sort((a, b) => (S.weights[b] * w.scores[b]) - (S.weights[a] * w.scores[a])).slice(0, 2);
+    const w = ok[0], def = DEF(), runner = ok[1];
     const why = h('p', { class: 'verdict-why' });
-    if (reasons.length) why.append('It has ', h('b', { text: reasons.slice(0, 2).join(' and ') }), '. ');
-    else if (strengths.length) why.append('It never wins a single category outright but is the best all-rounder, strongest on ', h('b', { text: strengths.map(k => metricDefs[k].label.toLowerCase()).join(' and ') }), '. ');
-    why.append(`It lifts ${F.mass(w.launchMass)} from the ground, spends ${F.ePerKg(w.energyPerKg)} and ${F.money(w.costPerKg)} per kilogram delivered, and pulls ${F.g(w.peakG)} at worst.`);
-    const runner = ok[1];
-    if (runner) why.append(' Runner-up: ', h('b', { text: runner.name }), ` (${runner.score.toFixed(0)}).`);
+    let big, bigNote;
+    if (def.id === 'overall') {
+      const e = w.cascade.eta;
+      big = F.pct(w.etaOverall); bigNote = 'overall efficiency: payload energy ÷ energy in';
+      why.append('Of every 100 joules it spends, ', h('b', { text: sig(100 * w.etaOverall, 3) }), ' end up as the payload’s orbital energy. ');
+      why.append(`The chain: conversion ${F.pct(e.conversion)} × propulsive ${F.pct(e.propulsive)} × aerodynamic ${F.pct(e.aero)} × payload share ${F.pct(e.payload)}${e.utilisation < 0.995 ? ` × utilisation ${F.pct(e.utilisation)}` : ''}. `);
+      const links = [['conversion', 'turning its energy source into kinetic energy'], ['propulsive', 'energy left in the exhaust'], ['aero', 'drag and heating in the air'], ['payload', 'energy carried off by spent hardware']];
+      const weak = links.reduce((a, b) => (e[b[0]] < e[a[0]] ? b : a));
+      why.append('Its weakest link is ', h('b', { text: weak[1] }), ` (${F.pct(e[weak[0]])}). `);
+      if (runner) why.append('Runner-up: ', h('b', { text: runner.name }), ` at ${F.pct(runner.etaOverall)}.`);
+    } else if (def.id === 'payload') {
+      big = F.pct(w.payloadFraction); bigNote = 'payload fraction: payload mass ÷ launch mass';
+      why.append(`The payload is ${F.pct(w.payloadFraction)} of the ${F.mass(w.launchMass)} that leaves the ground. Its overall energy efficiency is ${F.pct(w.etaOverall)} and it costs ${F.money(w.costPerKg)}/kg. `);
+      if (runner) why.append('Runner-up: ', h('b', { text: runner.name }), ` at ${F.pct(runner.payloadFraction)}.`);
+    } else if (def.id === 'cost') {
+      big = F.money(w.costPerKg) + '/kg'; bigNote = 'cost per kilogram delivered';
+      why.append(`At ${nf(S.econ.perYear)} launches a year for ${S.econ.years} years, each launch costs ${F.money(w.cost.total)} including amortized infrastructure. Its overall energy efficiency is ${F.pct(w.etaOverall)}. `);
+      if (runner) why.append('Runner-up: ', h('b', { text: runner.name }), ` at ${F.money(runner.costPerKg)}/kg.`);
+    } else {
+      big = w.score.toFixed(0); bigNote = '/ 100 weighted score';
+      const reasons = [];
+      const keys = Object.keys(metricDefs).filter(k => (S.weights[k] || 0) > 0).sort((a, b) => S.weights[b] - S.weights[a]);
+      for (const k of keys) { const b = bestBy(k); if (b && b.id === w.id) reasons.push(`the best ${metricDefs[k].label.toLowerCase()} figure (${metricDefs[k].fmt(w[k])})`); }
+      const strengths = Object.keys(w.scores || {}).filter(k => (S.weights[k] || 0) > 0).sort((a, b) => (S.weights[b] * w.scores[b]) - (S.weights[a] * w.scores[a])).slice(0, 2);
+      if (reasons.length) why.append('It has ', h('b', { text: reasons.slice(0, 2).join(' and ') }), '. ');
+      else if (strengths.length) why.append('It never wins a single category outright but is the best all-rounder, strongest on ', h('b', { text: strengths.map(k => metricDefs[k].label.toLowerCase()).join(' and ') }), '. ');
+      if (runner) why.append('Runner-up: ', h('b', { text: runner.name }), ` (${runner.score.toFixed(0)}).`);
+    }
+    why.append(` It lifts ${F.mass(w.launchMass)} and pulls ${F.g(w.peakG)} at worst.`);
     const main = h('div', { class: 'verdict-main' },
-      h('p', { class: 'eyebrow', text: 'Most efficient for this payload' }),
+      h('p', { class: 'eyebrow', text: 'Most efficient by ' + def.label.toLowerCase() }),
       h('h2', { class: 'verdict-title', text: METHOD[w.id].short }),
       h('p', { class: 'verdict-full', text: w.name + ' · TRL ' + w.trl }),
-      h('div', { class: 'verdict-score' }, h('strong', { text: w.score.toFixed(0) }), h('span', { text: '/ 100 weighted score' })),
+      h('div', { class: 'verdict-score' }, h('strong', { text: big }), h('span', { text: bigNote })),
       why,
       h('p', { class: 'verdict-mission', text: mission }));
     const pod = h('div', { class: 'podium' }, h('p', { class: 'eyebrow', style: { marginBottom: '4px' }, text: 'Category leaders' }));
@@ -412,7 +455,7 @@
     { k: 'rank', label: '#', sort: false },
     { k: 'name', label: 'Method', sort: false },
     { k: 'score', label: 'Score', fmt: r => r.score },
-    { k: 'eff', label: 'Energy eff.', fmt: r => F.pct(r.eff), dir: -1 },
+    { k: 'etaOverall', label: 'η overall', fmt: r => F.pct(r.etaOverall), dir: -1 },
     { k: 'energyPerKg', label: 'Energy/kg', fmt: r => F.ePerKg(r.energyPerKg), dir: 1 },
     { k: 'costPerKg', label: 'Cost/kg', fmt: r => F.money(r.costPerKg), dir: 1 },
     { k: 'launchMass', label: 'Launch mass', fmt: r => F.mass(r.launchMass), dir: 1 },
@@ -472,6 +515,7 @@
     renderTele();
     drawRange();
     renderDossier();
+    renderAudit();
     renderCharts();
     const sel = $('#teleSel');
     if (sel.value !== id) sel.value = id;
@@ -871,7 +915,7 @@
     const asc = k => ok.slice().sort((a, b) => a[k] - b[k]);
     const mk = (title, sub, wide) => { const c = h('div', { class: 'chart' + (wide ? ' wide' : '') }, h('h3', { text: title }), h('p', { class: 'sub', text: sub })); const body = h('div'); c.append(body); box.append(c); return body; };
     const charts = [
-      () => barChart(mk('Energy spent per kg delivered', 'All sources, including making the propellant. Lower is better.'), asc('energyPerKg').map(r => ({ id: r.id, family: r.family, value: r.energyPerKg / 1e6 })), { log: true, title: 'Energy per kg', fmt: v => sig(v, 3) + ' MJ', tickFmt: v => sig(v, 1), note: r => 'Efficiency ' + F.pct(R.byId[r.id].eff) }),
+      () => barChart(mk('Energy spent per kg delivered', 'All sources, including making the propellant. Lower is better.'), asc('energyPerKg').map(r => ({ id: r.id, family: r.family, value: r.energyPerKg / 1e6 })), { log: true, title: 'Energy per kg', fmt: v => sig(v, 3) + ' MJ', tickFmt: v => sig(v, 1), note: r => 'Lifecycle efficiency ' + F.pct(R.byId[r.id].eff) + ' · overall η ' + F.pct(R.byId[r.id].etaOverall) }),
       () => barChart(mk('Cost per kg delivered', 'Hardware, propellant, power, operations and amortized infrastructure. Lower is better.'), asc('costPerKg').map(r => ({ id: r.id, family: r.family, value: r.costPerKg })), { log: true, title: 'Cost per kg', fmt: v => F.money(v), tickFmt: v => F.money(v) }),
       () => barChart(mk('Launch mass per kg of payload', 'Everything that leaves the ground, launcher hardware excluded. Lower is better.'), asc('launchMass').map(r => ({ id: r.id, family: r.family, value: r.launchMass / R.ctx.payload.mass })), { log: true, title: 'Mass ratio', fmt: v => sig(v, 3) + ' kg', tickFmt: v => sig(v, 1) }),
       () => barChart(mk('Peak acceleration on the payload', 'Launch, drag and burn loads. The red line is what your payload survives.'), asc('peakG').map(r => ({ id: r.id, family: r.family, value: Math.max(1, r.peakG) })), { log: true, title: 'Peak g', fmt: v => F.g(v), tickFmt: v => nf(v), limit: R.ctx.payload.gTol, limitLabel: 'limit ' + nf(R.ctx.payload.gTol) + ' g' }),
@@ -899,6 +943,7 @@
     gTol: { label: 'Survivable acceleration', vals: [3, 10, 30, 100, 300, 1000, 3000, 10000, 50000], fmt: v => nf(v) + ' g', axis: v => (v >= 1000 ? v / 1000 + 'k' : v) + ' g', apply: (c, v) => { c.payload.gTol = v; } },
   };
   const SWEEP_Y = {
+    etaOverall: { label: 'Overall efficiency', get: r => r.etaOverall, fmt: v => F.pct(v), high: true },
     costPerKg: { label: 'Cost per kg', get: r => r.costPerKg, fmt: v => F.money(v) },
     energyPerKg: { label: 'Energy per kg', get: r => r.energyPerKg, fmt: v => F.ePerKg(v) },
     massRatio: { label: 'Launch mass per kg', get: (r, c) => r.launchMass / c.payload.mass, fmt: v => sig(v, 3) + ' kg/kg' },
@@ -946,7 +991,7 @@
     // winners per x
     const winners = d.rows.map((row, i) => {
       let best = null;
-      for (const s of series) { const p = s.pts[i]; if (p && p[1] > 0 && (!best || p[1] < best.y)) best = { id: s.id, y: p[1] }; }
+      for (const s of series) { const p = s.pts[i]; if (p && p[1] > 0 && (!best || (Y.high ? p[1] > best.y : p[1] < best.y))) best = { id: s.id, y: p[1] }; }
       return best;
     });
     // highlight: anything that wins somewhere, plus the selected method
@@ -1018,7 +1063,7 @@
       cross.setAttribute('x1', x); cross.setAttribute('x2', x); cross.setAttribute('visibility', 'visible');
       showTip(e, t => {
         t.append(h('strong', { text: X.fmt(d.rows[bi].v) }));
-        series.map(s => ({ s, p: s.pts[bi] })).filter(o => o.p).sort((a, b) => a.p[1] - b.p[1]).forEach(o => {
+        series.map(s => ({ s, p: s.pts[bi] })).filter(o => o.p).sort((a, b) => (Y.high ? b.p[1] - a.p[1] : a.p[1] - b.p[1])).forEach(o => {
           const key = h('span', { class: 'key' }); key.style.borderColor = `var(--fam-${o.s.family})`;
           t.append(h('div', { class: 'row' }, key, METHOD[o.s.id].short, h('b', { text: Y.fmt(o.p[1]) })));
         });
@@ -1094,7 +1139,7 @@
     if (r.feasible) {
       const tiles = [
         ['Launch mass', F.mass(r.launchMass), F.pct(r.payloadFraction) + ' payload'],
-        ['Energy per kg', F.ePerKg(r.energyPerKg), F.pct(r.eff) + ' efficient'],
+        ['Overall efficiency', F.pct(r.etaOverall), F.ePerKg(r.energyPerKg) + ' lifecycle energy'],
         ['Cost per kg', F.money(r.costPerKg), F.money(r.cost.total) + ' per launch'],
         ['Peak load', F.g(r.peakG), 'limit ' + nf(R.ctx.payload.gTol) + ' g'],
         ['CO₂ per kg', F.co2(r.co2PerKg), F.mass(r.co2) + ' per launch'],
@@ -1138,7 +1183,7 @@
     const eSec = h('section', {}, h('h3', { text: 'Energy per launch' }),
       stackBar([{ label: 'Onboard propellant', v: E.onboard, color: 'var(--src-onboard)' }, { label: 'Grid & ground fuel', v: E.ground, color: 'var(--src-ground)' }, { label: 'Solar in orbit', v: E.space, color: 'var(--src-space)' }, { label: 'Making propellant', v: E.made, color: 'var(--src-made)' }]),
       kv([['Onboard propellant', F.energy(E.onboard)], ['Grid power & ground fuel', F.energy(E.ground)], ['Solar power in orbit', F.energy(E.space)], ['Making the propellant', F.energy(E.made)],
-        ['Useful energy given to the payload', F.energy(r.useful)], ['Total spent', F.energy(E.total) + ' · ' + F.pct(r.eff) + ' efficient']], true),
+        ['Useful energy given to the payload', F.energy(r.useful)], ['Total incl. propellant production', F.energy(E.total) + ' · ' + F.pct(r.eff) + ' lifecycle']], true),
       h('p', { class: 'hint', text: `Per kilogram of payload: ${F.ePerKg(E.total / mp)} spent for ${F.ePerKg(r.useful / mp)} of orbital energy.` }));
     // cost
     const c = r.cost;
@@ -1152,8 +1197,100 @@
     evs.forEach(e => tl.append(h('li', {}, h('time', { text: F.clock(e.t) }), h('span', { text: e.label }))));
     const tSec = h('section', {}, h('h3', { text: 'Flight timeline' }), tl);
     const spSec = h('section', {}, h('h3', { text: 'Key numbers' }), kv(specifics(r)));
-    grid.append(massSec, dvSec, eSec, cSec, tSec, spSec, flags, how);
+    const ce = r.cascade ? r.cascade.eta : null;
+    const effSec = h('section', {}, h('h3', { text: 'Efficiency chain' }),
+      ce ? kv([['Utilisation (energy spent on the ascent)', F.pct(ce.utilisation)], ['Conversion (internal efficiency)', F.pct(ce.conversion)], ['Propulsive (kept by the vehicle, not the plume)', F.pct(ce.propulsive)],
+        ['Aerodynamic (not lost to drag)', F.pct(ce.aero)], ['Payload share (not carried off by spent hardware)', F.pct(ce.payload)], ['Overall efficiency, E_payload / E_in', F.pct(ce.overall)]], true) : null,
+      h('p', { class: 'hint', text: 'Measured from the simulated flight. The full waterfall is in the efficiency audit above.' }));
+    grid.append(effSec, massSec, dvSec, eSec, cSec, tSec, spSec, flags, how);
     box.append(grid);
+  }
+
+  // ───────────────────────── efficiency audit ─────────────────────────
+  const TERMS = [
+    { k: 'utilisation', sym: 'η_use', name: 'Utilisation', text: 'Share of the energy spent on this ascent at all. Landing reserves and propellant left unburned are excluded.' },
+    { k: 'conversion', sym: 'η_conv', name: 'Conversion (internal)', text: 'Chemical, electrical or beamed energy turned into jet or projectile kinetic energy. For a rocket, ½c²/q (Sutton & Biblarz).' },
+    { k: 'propulsive', sym: 'η_prop', name: 'Propulsive', text: 'Mechanical energy that stays with the vehicle rather than the exhaust plume. For a jet, 2(u/c)/(1 + (u/c)²) at each instant.' },
+    { k: 'aero', sym: 'η_aero', name: 'Aerodynamic', text: 'Energy not dissipated by drag and heating on the way out of the atmosphere.' },
+    { k: 'payload', sym: 'η_payload', name: 'Payload share', text: 'The payload’s share of the energy the vehicle kept. The rest leaves with stages, fairings, aeroshells and climbers.' },
+  ];
+  const BIN_KEYS = [
+    { k: 'reserve', label: 'Reserves & unburned' }, { k: 'conversion', label: 'Conversion losses' }, { k: 'exhaust', label: 'Exhaust plume' },
+    { k: 'drag', label: 'Drag & heating' }, { k: 'hardware', label: 'Spent hardware' }, { k: 'payload', label: 'Payload (useful)' },
+  ];
+  const subscript = s => { const m = s.split('_'); const f = document.createDocumentFragment(); f.append(m[0]); if (m[1]) f.append(h('sub', { text: m[1] })); return f; };
+  function renderAudit() {
+    const box = $('#audit');
+    if (!box || !R.results.length) return;
+    const ok = R.results.filter(r => r.feasible && r.cascade).sort((a, b) => b.etaOverall - a.etaOverall);
+    const sel = $('#auditSel');
+    if (sel.options.length !== ok.length || [...sel.options].some((o, i) => o.value !== ok[i].id)) {
+      sel.textContent = '';
+      ok.forEach(q => sel.append(h('option', { value: q.id, text: `${METHOD[q.id].short} · η ${F.pct(q.etaOverall)}` })));
+    }
+    const r = R.byId[R.selected] && R.byId[R.selected].cascade ? R.byId[R.selected] : ok[0];
+    if (!r) { $('#waterfall').textContent = ''; return; }
+    sel.value = r.id;
+    const c = r.cascade, mp = R.ctx.payload.mass;
+    // definition terms, filled with the selected method's numbers
+    const terms = $('#eqTerms');
+    terms.textContent = '';
+    terms.append(h('div', {}, h('dt', {}, subscript('η_overall'), ` = ${F.pct(c.eta.overall)}`), h('dd', { text: `${METHOD[r.id].short}: ${F.ePerKg(r.useful / mp)} of orbital energy per kg of payload, for ${F.ePerKg(c.Ein / mp)} spent.` })));
+    TERMS.forEach(t => terms.append(h('div', {}, h('dt', {}, subscript(t.sym), ` = ${F.pct(c.eta[t.k])}`), h('dd', {}, h('b', { text: t.name + '. ' }), t.text))));
+    // waterfall for the selected method
+    const host = $('#waterfall');
+    host.textContent = '';
+    const rows = [{ label: 'Energy in', k: 'in', from: 0, to: 1, J: c.Ein }];
+    let rem = 1;
+    c.bins.forEach(b => {
+      const f = b.J / c.Ein;
+      if (b.k === 'payload') rows.push({ label: 'Payload orbital energy', k: 'payload', from: 0, to: f, J: b.J });
+      else if (f > 0.0005) { rows.push({ label: '− ' + b.label, k: b.k, from: rem - f, to: rem, J: b.J }); rem -= f; }
+    });
+    const W = Math.max(300, host.clientWidth || 460), rowH = 30, labW = Math.min(196, W * 0.42), valW = 64, top = 4, axisH = 18;
+    const plotW = W - labW - valW, Hh = top + rows.length * rowH + axisH;
+    const X = f => labW + f * plotW;
+    const svg = sv('svg', { viewBox: `0 0 ${W} ${Hh}`, role: 'img', 'aria-label': `Energy waterfall for ${METHOD[r.id].name}` });
+    [0, 0.25, 0.5, 0.75, 1].forEach(f => { const x = Math.round(X(f)) + 0.5; svg.append(sv('line', { class: 'grid', x1: x, x2: x, y1: top, y2: top + rows.length * rowH }), sv('text', { class: 'ax', x, y: Hh - 4, 'text-anchor': 'middle' }, (f * 100) + '%')); });
+    rows.forEach((row, i) => {
+      const y = top + i * rowH, bh = 16, by = y + (rowH - bh) / 2;
+      const isEnd = row.k === 'in' || row.k === 'payload';
+      svg.append(sv('text', { x: labW - 8, y: y + rowH / 2 + 4, 'text-anchor': 'end', style: isEnd ? 'font-weight:600;fill:var(--ink)' : null }, row.label));
+      const bar = sv('rect', { class: row.k === 'in' ? null : 'f-' + row.k, x: X(row.from), y: by, width: Math.max(1, X(row.to) - X(row.from)), height: bh, rx: 2, style: row.k === 'in' ? 'fill:var(--ink-2)' : null });
+      bar.addEventListener('pointermove', e => showTip(e, t => t.append(h('strong', { text: `${F.pct(row.J / c.Ein)} · ${F.ePerKg(row.J / mp)}` }), h('div', { class: 'row', text: row.label.replace('− ', '') }))));
+      bar.addEventListener('pointerleave', hideTip);
+      svg.append(bar);
+      if (i < rows.length - 2) svg.append(sv('line', { class: 'base', x1: X(i === 0 ? 1 : row.from), x2: X(i === 0 ? 1 : row.from), y1: by + bh, y2: by + rowH, 'stroke-dasharray': '2 2' }));
+      svg.append(sv('text', { class: 'val', x: labW + plotW + 8, y: y + rowH / 2 + 4 }, `${sig(100 * row.J / c.Ein, 3)}%`));
+    });
+    host.append(svg);
+    const srcTxt = c.sources.map(s => `${F.pct(s.J / c.Ein)} ${/^Earth/.test(s.label) ? s.label : s.label.charAt(0).toLowerCase() + s.label.slice(1)}`).join(', ');
+    $('#auditNote').textContent = `Energy in: ${F.ePerKg(c.Ein / mp)} of payload, made up of ${srcTxt}. Conversion losses here: ${c.convNote.charAt(0).toLowerCase() + c.convNote.slice(1)} Ledger residual ${sig(Math.abs(c.closure) * 100, 1)}%.`;
+    // all methods
+    const lg = $('#binLegend');
+    lg.textContent = '';
+    BIN_KEYS.forEach(k => lg.append(h('span', {}, h('span', { class: 'sw ' + k.k }), k.label)));
+    stackChart($('#joules'), ok.map(q => ({ id: q.id, parts: Object.fromEntries(q.cascade.bins.map(b => [b.k, Math.max(0, b.J) / mp])) })), BIN_KEYS, { title: 'Where every joule goes', total: q => 'η ' + F.pct(R.byId[q.id].etaOverall) });
+    // factor table
+    const tab = $('#etaTable');
+    tab.textContent = '';
+    const cols = [['utilisation', 'η use'], ['conversion', 'η conv'], ['propulsive', 'η prop'], ['aero', 'η aero'], ['payload', 'η payload'], ['overall', 'η overall']];
+    const best = Object.fromEntries(cols.map(([k]) => [k, Math.max(...ok.map(q => q.cascade.eta[k]))]));
+    // a column leader is marked at display precision; a column where most methods tie has no leader worth marking
+    const isBest = (k, v) => best[k] - v < 5e-4;
+    const marked = Object.fromEntries(cols.map(([k]) => [k, ok.filter(q => isBest(k, q.cascade.eta[k])).length <= 3]));
+    const thead = h('thead', {}, h('tr', {}, h('th', { text: '#' }), h('th', { text: 'Method' }), cols.map(([, l]) => h('th', { text: l })), h('th', { text: 'Energy in /kg' }), h('th', { text: 'Lifecycle η' })));
+    const tb = h('tbody');
+    ok.forEach((q, i) => {
+      const tr = h('tr', { class: q.id === r.id ? 'sel' : null, tabindex: '0' },
+        h('td', {}, h('span', { class: 'rank', text: i + 1 })), h('td', { class: 'name' }, h('span', { class: 'mname' }, h('span', { class: 'sw ' + q.family }), METHOD[q.id].short)),
+        cols.map(([k]) => h('td', { class: marked[k] && isBest(k, q.cascade.eta[k]) ? 'best' : null, text: F.pct(q.cascade.eta[k]) })),
+        h('td', { text: F.ePerKg(q.cascade.Ein / mp) }), h('td', { text: F.pct(q.eff) }));
+      tr.addEventListener('click', () => select(q.id));
+      tr.addEventListener('keydown', e => { if (e.key === 'Enter') select(q.id); });
+      tb.append(tr);
+    });
+    tab.append(thead, tb);
   }
 
   // ───────────────────────── render all ─────────────────────────
@@ -1165,6 +1302,7 @@
     drawRange();
     renderCharts();
     renderDossier();
+    renderAudit();
   }
 
   // ───────────────────────── wiring ─────────────────────────
@@ -1178,6 +1316,7 @@
     $('#sweepX').addEventListener('change', e => { sweep.x = e.target.value; sweep.data = null; renderSweep(); runSweep(); });
     $('#sweepY').addEventListener('change', e => { sweep.y = e.target.value; renderSweep(); });
     $('#sweepBtn').addEventListener('click', runSweep);
+    $('#auditSel').addEventListener('change', e => select(e.target.value));
     let rt = null;
     const reflow = () => { clearTimeout(rt); rt = setTimeout(() => { if (!R.results.length) return; drawRange(); renderCharts(); renderSweep(); }, 120); };
     window.addEventListener('resize', reflow);

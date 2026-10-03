@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>LAUNCHBENCH</title>
+<meta name="description" content="One payload, thirteen ways to space: rockets, mass drivers, railguns, light-gas guns, spin slings, a rotating skyhook and a space elevator, each flown from first principles and ranked by efficiency.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<!--BODY-->
+<header class="mast">
+  <div class="mast-in">
+    <div class="brand">
+      <svg width="44" height="44" viewBox="0 0 44 44" aria-hidden="true">
+        <circle cx="22" cy="30" r="12" fill="none" stroke="currentColor" stroke-width="2"/>
+        <path d="M4 30 A18 18 0 0 1 40 30" fill="none" stroke="currentColor" stroke-width="1" stroke-dasharray="2 3"/>
+        <path d="M22 18 C 24 10, 31 5, 40 4" fill="none" stroke="var(--signal)" stroke-width="2.4" stroke-linecap="round"/>
+        <circle cx="40" cy="4" r="2.6" fill="var(--signal)"/>
+      </svg>
+      <div>
+        <h1 class="wordmark">LAUNCHBENCH</h1>
+        <p class="tagline">One payload, thirteen ways to space. Each method is flown or solved from first principles, then ranked on energy, cost, mass, readiness and emissions.</p>
+      </div>
+    </div>
+    <div class="mast-actions">
+      <span class="run-state" id="runState" aria-live="polite">Ready</span>
+      <button class="run-btn" id="runBtn" type="button">
+        <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M3 1.5 L12 7 L3 12.5 Z" fill="currentColor"/></svg>
+        Run trials
+      </button>
+    </div>
+  </div>
+  <div class="progress" aria-hidden="true"><i id="progress"></i></div>
+</header>
+
+<main class="bench">
+  <!-- ─────────────── input rail ─────────────── -->
+  <aside class="rail" aria-label="Test setup">
+    <section class="card" aria-labelledby="hArticle">
+      <div class="card-h"><p class="eyebrow" id="hArticle">Test article</p><span class="trl" id="taSerial">TA-01</span></div>
+      <div class="card-b">
+        <div class="chips" id="presets" role="group" aria-label="Payload presets"></div>
+        <div class="field">
+          <div class="field-row"><label for="mass">Payload mass</label><output id="massOut" for="mass"></output></div>
+          <input type="range" id="mass" min="0" max="5" step="0.01" aria-describedby="massOut">
+        </div>
+        <div class="field">
+          <div class="field-row"><label for="gTol">Survivable acceleration</label><output id="gTolOut" for="gTol"></output></div>
+          <input type="range" id="gTol" min="0.3" max="4.7" step="0.01">
+          <p class="hint" id="gHint"></p>
+        </div>
+        <div class="field">
+          <div class="field-row"><label for="density">Packed density</label><output id="densityOut" for="density"></output></div>
+          <input type="range" id="density" min="100" max="2500" step="10">
+          <p class="hint">Sets the projectile's size, and with it the ballistic coefficient on gun launches.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="hMission">
+      <div class="card-h"><p class="eyebrow" id="hMission">Destination</p></div>
+      <div class="card-b">
+        <div class="seg" id="dest" role="group" aria-label="Destination">
+          <button type="button" data-v="LEO">LEO</button><button type="button" data-v="GEO">GEO</button><button type="button" data-v="TLI">Moon</button><button type="button" data-v="MARS">Mars</button><button type="button" data-v="JUP">Jupiter</button>
+        </div>
+        <p class="hint" id="destLabel"></p>
+        <div class="field" id="altField">
+          <div class="field-row"><label for="alt">Orbit altitude</label><output id="altOut" for="alt"></output></div>
+          <input type="range" id="alt" min="200" max="2000" step="10">
+        </div>
+        <label class="check" id="assistField"><input type="checkbox" id="assist"> Use Venus–Earth–Earth gravity-assist slingshots</label>
+        <div class="field">
+          <div class="field-row"><label for="lat">Launch site latitude</label><output id="latOut" for="lat"></output></div>
+          <input type="range" id="lat" min="0" max="62" step="0.1">
+          <div class="chips" id="sites" role="group" aria-label="Launch sites"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="hCampaign">
+      <div class="card-h"><p class="eyebrow" id="hCampaign">Campaign &amp; economics</p></div>
+      <div class="card-b">
+        <div class="field">
+          <div class="field-row"><label for="perYear">Launches per year</label><output id="perYearOut" for="perYear"></output></div>
+          <input type="range" id="perYear" min="0" max="4" step="0.01">
+          <p class="hint">Infrastructure cost is spread over every launch in the campaign. Big fixed systems only pay off at high cadence.</p>
+        </div>
+        <div class="field">
+          <div class="field-row"><label for="years">Campaign length</label><output id="yearsOut" for="years"></output></div>
+          <input type="range" id="years" min="1" max="40" step="1">
+        </div>
+        <div class="inline-inputs field">
+          <div><label class="lbl" for="elecPrice">Electricity $/kWh</label><input type="number" id="elecPrice" min="0" max="1" step="0.01"></div>
+          <div><label class="lbl" for="gridCO2">Grid kg CO₂/kWh</label><input type="number" id="gridCO2" min="0" max="1.2" step="0.01"></div>
+        </div>
+      </div>
+    </section>
+
+    <details class="card fold" id="weightsCard">
+      <summary class="card-h"><p class="eyebrow">What “efficient” means to you</p><span class="trl" id="wSum"></span></summary>
+      <div class="card-b" id="weights"></div>
+    </details>
+
+    <section class="card" aria-labelledby="hMethods">
+      <div class="card-h"><p class="eyebrow" id="hMethods">Methods under test</p><span class="trl" id="mCount"></span></div>
+      <div class="card-b" id="roster"></div>
+    </section>
+  </aside>
+
+  <!-- ─────────────── trial record ─────────────── -->
+  <div class="record">
+    <section class="card verdict" id="verdict" aria-live="polite" aria-label="Verdict"></section>
+
+    <section class="card range" aria-labelledby="hRange">
+      <div class="sec-head">
+        <div>
+          <p class="eyebrow">Range view</p>
+          <h2 class="sec" id="hRange">Every trajectory, same payload</h2>
+        </div>
+        <div class="tabs" role="tablist" aria-label="Range view">
+          <button type="button" role="tab" id="tabAscent" aria-selected="true">Ascent profile</button>
+          <button type="button" role="tab" id="tabOrbit" aria-selected="false">Orbital view</button>
+        </div>
+      </div>
+      <div class="legend" id="rangeLegend" style="padding: 10px 18px 6px"></div>
+      <div class="range-grid">
+        <div class="canvas-wrap">
+          <canvas id="rangeCanvas" aria-label="Trajectories of every launch method"></canvas>
+          <div class="playbar">
+            <button class="icon-btn" type="button" id="playBtn"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 1 L9 5 L2 9 Z" fill="currentColor"/></svg><span>Replay</span></button>
+            <input type="range" id="scrub" min="0" max="1000" step="1" value="1000" aria-label="Replay position">
+            <span class="val" id="scrubOut">100%</span>
+          </div>
+          <p class="range-note" id="rangeNote">Replay is normalized: each flight is scaled to the same duration so a 9-minute rocket and a week-long elevator climb can be compared side by side.</p>
+        </div>
+        <div class="tele" aria-live="off">
+          <div>
+            <label class="lbl" for="teleSel">Follow</label>
+            <select id="teleSel"></select>
+          </div>
+          <p class="tele-name" id="teleName"></p>
+          <p class="tele-phase" id="telePhase"></p>
+          <dl>
+            <dt>Mission clock</dt><dd id="tT">–</dd>
+            <dt>Altitude</dt><dd id="tAlt">–</dd>
+            <dt>Downrange</dt><dd id="tDr">–</dd>
+            <dt>Inertial speed</dt><dd id="tV">–</dd>
+            <dt>Airspeed</dt><dd id="tVr">–</dd>
+            <dt>Load</dt><dd id="tG">–</dd>
+            <dt>Dynamic pressure</dt><dd id="tQ">–</dd>
+            <dt>Mass</dt><dd id="tM">–</dd>
+          </dl>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="hBoard">
+      <div class="sec-head">
+        <div>
+          <p class="eyebrow">Leaderboard</p>
+          <h2 class="sec" id="hBoard">Ranked by your definition of efficient</h2>
+          <p class="sec-sub">Click a row for its full dossier. Click a column heading to sort. Methods that cannot do this job sit at the bottom with the reason.</p>
+        </div>
+      </div>
+      <div class="board-wrap"><table class="board" id="board"></table></div>
+    </section>
+
+    <section class="card" aria-labelledby="hCharts">
+      <div class="sec-head">
+        <div>
+          <p class="eyebrow">Comparison</p>
+          <h2 class="sec" id="hCharts">Where the differences come from</h2>
+          <p class="sec-sub">Bars are coloured by family. Values are per kilogram of payload delivered to the destination, on log scales where they span decades.</p>
+        </div>
+        <div class="legend" id="famLegend"></div>
+      </div>
+      <div class="charts" id="charts" style="margin-top: 12px"></div>
+    </section>
+
+    <section class="card" aria-labelledby="hSweep">
+      <div class="sec-head">
+        <div>
+          <p class="eyebrow">Crossover analysis</p>
+          <h2 class="sec" id="hSweep">When does the winner change?</h2>
+          <p class="sec-sub" id="sweepSub">The same trials rerun across a range of payload sizes. Each method keeps its settings; the strip shows who wins at each point.</p>
+        </div>
+      </div>
+      <div class="sweep-controls">
+        <div class="field">
+          <label class="lbl" for="sweepX">Vary</label>
+          <select id="sweepX">
+            <option value="mass">Payload mass (1 kg to 100 t)</option>
+            <option value="perYear">Launches per year (1 to 10,000)</option>
+            <option value="gTol">Survivable acceleration (3 g to 50,000 g)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label class="lbl" for="sweepY">Compare by</label>
+          <select id="sweepY">
+            <option value="costPerKg">Cost per kg</option>
+            <option value="energyPerKg">Energy per kg</option>
+            <option value="massRatio">Launch mass per kg of payload</option>
+            <option value="co2PerKg">CO₂ per kg</option>
+          </select>
+        </div>
+        <button class="icon-btn" type="button" id="sweepBtn">Run sweep</button>
+        <span class="run-state" id="sweepState"></span>
+      </div>
+      <div class="sweep-body">
+        <div class="winner-strip" id="winnerStrip" aria-label="Winner at each point"></div>
+        <div id="sweepChart"></div>
+        <div class="legend" id="sweepLegend" style="margin-top: 8px"></div>
+      </div>
+    </section>
+
+    <section class="card" id="dossier" aria-label="Method dossier"></section>
+
+    <section class="card" aria-labelledby="hNotes">
+      <div class="sec-head"><div><p class="eyebrow">Method</p><h2 class="sec" id="hNotes">How the bench works</h2></div></div>
+      <div class="notes">
+        <h3>One test article</h3>
+        <p>Every method carries the same payload with the same acceleration limit to the same destination. Beyond low orbit, a storable departure stage (Isp 320 s) is added to the payload stack for every ground launcher, so they all deliver identical stacks to a parking orbit. The tether and elevator release the payload on their own orbits and size their own kick stage.</p>
+        <h3>Flown, not estimated</h3>
+        <p>Rockets fly a 2-D point-mass trajectory over a rotating spherical Earth: inverse-square gravity, the US Standard Atmosphere 1976 (tables to 1,000 km), Mach-dependent drag, Isp that rises with altitude, throttling to respect the payload's g-limit, a pitch kick and gravity turn, then closed-loop guidance into a transfer orbit. Stage masses come from the rocket equation with structure fractions that worsen as vehicles shrink. The vehicle is resized against the losses it actually suffers until the flight closes.</p>
+        <p>Gun, track and sling projectiles leave the muzzle and coast through the air with a slender-body drag curve. They pull up to tens of g of drag deceleration and take Sutton–Graves stagnation heating (q̇ = 1.74×10⁻⁴·√(ρ/rₙ)·v³). An ablator is sized from the drag work. A hardened onboard stage then lights near apoapsis. The exit angle and speed are searched for the lightest projectile that reaches orbit.</p>
+        <h3>Energy</h3>
+        <p>Energy efficiency is the payload's gain in specific orbital energy divided by everything spent: propellant combustion energy, grid electricity at the launcher, carrier-aircraft fuel, solar energy for tether reboost, and the energy to make the propellants (air separation, refining, electrolysis and liquefaction).</p>
+        <h3>Cost and readiness</h3>
+        <p>Hardware follows a TRANSCOST-style law (cost ∝ dry mass^0.6, calibrated so a Falcon 9 first stage costs about $30M). Infrastructure is spread over the campaign: more facilities are built if the launch rate exceeds one site's capacity. Costs for systems that do not exist (the maglev tube, rotovator and elevator) use published estimates and are uncertain by large factors. Readiness is NASA's TRL scale, assessed for 2026.</p>
+        <h3>Limits of the model</h3>
+        <ul>
+          <li>Planar flight: the launch azimuth is due east, so inclination equals latitude and GEO missions pay for the plane change.</li>
+          <li>Point masses: no aerodynamic lift. That penalises air launch, where Pegasus uses a wing.</li>
+          <li>Gun-launch heating uses a fixed heat fraction of the drag work; real ablation depends on nose shape and transition.</li>
+          <li>The rotovator catch and the elevator ribbon need technology that has never been demonstrated. Their numbers show what physics allows if the engineering works.</li>
+        </ul>
+        <h3>Further reading</h3>
+        <ul>
+          <li><a href="https://en.wikipedia.org/wiki/StarTram" target="_blank" rel="noopener">StarTram maglev launch</a> · <a href="https://en.wikipedia.org/wiki/SpinLaunch" target="_blank" rel="noopener">SpinLaunch</a> · <a href="https://en.wikipedia.org/wiki/Quicklaunch" target="_blank" rel="noopener">Quicklaunch light-gas gun</a></li>
+          <li><a href="https://en.wikipedia.org/wiki/Skyhook_(structure)" target="_blank" rel="noopener">Skyhooks and rotovators</a> · <a href="https://en.wikipedia.org/wiki/Space_elevator" target="_blank" rel="noopener">Space elevator</a> · <a href="https://en.wikipedia.org/wiki/Laser_propulsion" target="_blank" rel="noopener">Laser propulsion</a></li>
+          <li><a href="https://en.wikipedia.org/wiki/U.S._Standard_Atmosphere" target="_blank" rel="noopener">US Standard Atmosphere 1976</a> · <a href="https://en.wikipedia.org/wiki/Gravity_assist" target="_blank" rel="noopener">Gravity assist</a></li>
+        </ul>
+      </div>
+    </section>
+  </div>
+</main>
+<footer class="foot">LAUNCHBENCH · physics engine validated against US-1976 atmosphere tables, Hohmann and plane-change Δv, the rocket equation, elevator energetics and a Falcon 9-class benchmark (node test/validate.js).</footer>
+<div class="tip" id="tip" hidden></div>
+<script src="engine.js"></script>
+<script src="app.js"></script>
+<!--/BODY-->
+</body>
+</html>

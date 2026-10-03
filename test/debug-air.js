@@ -1,0 +1,11 @@
+const LB = require('../engine.js');
+const gp = +(process.argv[2] || 55);
+const ctx = LB.makeContext({ payload: { mass: 200, gTol: 12000 }, mission: { dest: 'LEO', alt: 500, lat: 28.5 } });
+const st = [{ prop: 'kerolox', law: 'booster', ispSL: 282, ispVac: 311, tw: 1.3 }, { prop: 'kerolox', law: 'upper', ispSL: 340, ispVac: 340, tw: 0.9 }];
+const spec = { stages: st, fairing: 30, pStart: LB.atm(11000).p, cdTab: LB.CD_ROCKET, aMax: 1e5, shell: 0 };
+const veh = LB.buildVehicle(spec, 200, 8800);
+const r0 = LB.RE + 11000;
+const init = { x: r0, y: 0, vx: 0, vy: ctx.omega * r0 + 236, omega: ctx.omega, mode: 'air' };
+const sim = LB.fly(veh, init, ctx.D.tgtIns, gp, { record: true });
+for (const p of sim.rec.slice(0, 60)) console.log(p.t.toFixed(1), 'alt', p.alt.toFixed(2), 'v', p.v.toFixed(0), 'vrel', p.vrel.toFixed(0), 'ph', p.ph, 'g', p.g.toFixed(2), 'm', p.m.toFixed(0));
+console.log(sim.events, veh.stages);
